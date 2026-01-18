@@ -2,36 +2,41 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Technion Grade Manipulator</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <style>
-        :root { --tn-blue: #00529B; }
-        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f8f9fa; }
-        .container { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-        .controls { background: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; }
-        table { width: 100%; border-collapse: collapse; }
-        th { background: var(--tn-blue); color: white; padding: 12px; }
-        td { border: 1px solid #dee2e6; padding: 8px; text-align: center; }
-        .summary-bar { position: sticky; bottom: 0; background: var(--tn-blue); color: white; padding: 20px; display: flex; justify-content: space-around; font-size: 1.3em; font-weight: bold; border-radius: 10px; margin-top: 20px; }
-        input { width: 90%; padding: 5px; border: 1px solid #ccc; border-radius: 4px; text-align: center; }
-        .btn { padding: 10px 20px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; }
-        .btn-upload { background: #28a745; color: white; }
+        :root { --tn-blue: #00529B; --success: #28a745; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #f0f2f5; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        h1 { color: var(--tn-blue); text-align: center; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .controls { background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; align-items: center; justify-content: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; }
+        th { background: var(--tn-blue); color: white; padding: 12px; position: sticky; top: 0; }
+        td { border: 1px solid #dee2e6; padding: 10px; text-align: center; }
+        input { width: 90%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-align: center; font-size: 14px; }
+        .summary-bar { position: sticky; bottom: 0; background: var(--tn-blue); color: white; padding: 25px; display: flex; justify-content: space-around; font-size: 1.4em; font-weight: bold; border-radius: 10px; margin-top: 30px; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); }
+        .btn { padding: 12px 24px; cursor: pointer; border-radius: 6px; border: none; font-weight: bold; transition: background 0.3s; }
+        .btn-upload { background: var(--success); color: white; }
+        .btn-add { background: #007bff; color: white; }
+        .delete-btn { color: #dc3545; cursor: pointer; background: none; border: none; font-size: 1.2em; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Academic Grade Manipulator</h2>
+    <h1>Academic Grade Manipulator</h1>
+    
     <div class="controls">
-        <input type="file" id="fileInput" accept=".pdf">
-        <button class="btn btn-upload" onclick="handleFileUpload()">Upload & Parse</button>
-        <button class="btn" onclick="addNewManualRow()">+ Add Future Course</button>
+        <input type="file" id="fileInput" accept=".pdf" style="width: auto;">
+        <button class="btn btn-upload" onclick="handleFileUpload()">Upload Transcript PDF</button>
+        <button class="btn btn-add" onclick="addNewManualRow()">+ Add Future Course</button>
     </div>
 
     <table>
         <thead>
             <tr>
-                <th>ID</th>
+                <th>Course ID</th>
                 <th>Course Name</th>
                 <th>Credits</th>
                 <th>Considered Grade</th>
@@ -49,9 +54,10 @@
 </div>
 
 <script>
+    // Initialize PDF.js worker
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-    let globalHistory = []; // To store every single exam entry for success rate logic
+    let globalHistory = []; // Tracks every individual exam attempt for Success Rate
 
     async function handleFileUpload() {
         const file = document.getElementById('fileInput').files[0];
@@ -66,9 +72,10 @@
             const content = await page.getTextContent();
             const text = content.items.map(item => item.str).join(" ");
             
-            // 1. Ignore the last 2 semesters (2025-2026)
+            // Logic: Stop parsing history once we hit the current active semester
             if (text.includes("2025-2026")) break;
 
+            // Regex matches: ID, Name, Credits, Grade
             const pattern = /(\d{6,8})\s+([\u0590-\u05FF\w\s\-\(\)]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption with points|Exemption without points|Not completed|עבר)/g;
             let match;
             while ((match = pattern.exec(text)) !== null) {
@@ -88,25 +95,30 @@
         tbody.innerHTML = "";
         
         const latestState = {};
+        
+        // Process history line-by-line to find the "Considered" state for the UI
         globalHistory.forEach(entry => {
             if (!latestState[entry.id]) {
                 latestState[entry.id] = { ...entry, displayGrade: entry.grade };
             }
-            // Logic: Update grade if numeric. If "Not completed", don't overwrite previous numeric.
+            
             const isNumeric = !isNaN(parseInt(entry.grade));
-            if (isNumeric) {
-                latestState[entry.id].displayGrade = entry.grade;
-            } else if (entry.grade === "Pass" || entry.grade === "עבר") {
+            const isLiteralPass = ["Pass", "עבר", "Exemption with points"].includes(entry.grade);
+
+            // Rule: Update considered grade if numeric or "Pass". 
+            // "Not completed" does not overwrite a previous passing grade for GPA.
+            if (isNumeric || isLiteralPass) {
                 latestState[entry.id].displayGrade = entry.grade;
             }
         });
 
+        // Add the considered courses to the UI
         Object.values(latestState).forEach(c => addRowToUI(c.id, c.name, c.credits, c.displayGrade));
         calculate();
     }
 
     function addNewManualRow() {
-        addRowToUI("", "Future Course", 0, "");
+        addRowToUI("", "New Course", 0, "");
     }
 
     function addRowToUI(id, name, credits, grade) {
@@ -116,7 +128,7 @@
             <td><input type="text" value="${name}"></td>
             <td><input type="number" class="creds" step="0.5" value="${credits}" oninput="calculate()"></td>
             <td><input type="text" class="grd" value="${grade}" oninput="calculate()"></td>
-            <td><button onclick="this.parentElement.parentElement.remove(); calculate()">✕</button></td>
+            <td><button class="delete-btn" onclick="this.parentElement.parentElement.remove(); calculate()">✕</button></td>
         `;
         calculate();
     }
@@ -126,33 +138,35 @@
         let attemptedCredits = 0;
         let passedCredits = 0;
         
-        // Success Rate: Must use ALL historical attempts
+        // 1. Success Rate: Based on ALL historical attempts parsed from PDF
         globalHistory.forEach(h => {
             attemptedCredits += h.credits;
-            const isPass = (parseInt(h.grade) >= 55) || ["Pass", "עבר", "Exemption with points"].includes(h.grade);
-            if (isPass) passedCredits += h.credits;
+            const isEntryPass = (parseInt(h.grade) >= 55) || ["Pass", "עבר", "Exemption with points"].includes(h.grade);
+            if (isEntryPass) passedCredits += h.credits;
         });
 
-        // GPA and Earned: Use only the rows currently visible (Considered Grades)
-        let totalPoints = 0, gpaCreds = 0, earned = 0;
+        // 2. GPA & Earned Credits: Based on the "Considered" rows currently in the table
+        let totalWeightedPoints = 0, gpaCredits = 0, earnedCredits = 0;
         
         rows.forEach(row => {
             const credits = parseFloat(row.querySelector('.creds').value) || 0;
             const grade = row.querySelector('.grd').value.trim();
             const numGrade = parseInt(grade);
 
+            // Credits logic: Count if passed numeric or literal "Pass"
             if (grade === "Exemption with points" || grade === "Pass" || grade === "עבר" || (numGrade >= 55)) {
-                earned += credits;
+                earnedCredits += credits;
             }
             
+            // GPA logic: Only numeric grades contribute to weighted average
             if (!isNaN(numGrade)) {
-                totalPoints += (numGrade * credits);
-                gpaCreds += credits;
+                totalWeightedPoints += (numGrade * credits);
+                gpaCredits += credits;
             }
         });
 
-        document.getElementById('earnedDisp').innerText = earned;
-        document.getElementById('gpaDisp').innerText = gpaCreds ? (totalPoints / gpaCreds).toFixed(1) : 0;
+        document.getElementById('earnedDisp').innerText = earnedCredits;
+        document.getElementById('gpaDisp').innerText = gpaCredits ? (totalWeightedPoints / gpaCredits).toFixed(1) : 0;
         document.getElementById('succDisp').innerText = attemptedCredits ? Math.round((passedCredits / attemptedCredits) * 100) : 0;
     }
 </script>
