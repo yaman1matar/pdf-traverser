@@ -7,7 +7,7 @@
     <style>
         :root { --tn-blue: #00529B; --success: #28a745; }
         body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f0f2f5; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
         h1 { color: var(--tn-blue); text-align: center; border-bottom: 2px solid #eee; padding-bottom: 10px; }
         .controls { background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; justify-content: center; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; }
@@ -17,18 +17,16 @@
         .summary-bar { position: sticky; bottom: 0; background: var(--tn-blue); color: white; padding: 25px; display: flex; justify-content: space-around; font-size: 1.4em; font-weight: bold; border-radius: 10px; margin-top: 30px; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); }
         .btn { padding: 12px 24px; cursor: pointer; border-radius: 6px; border: none; font-weight: bold; }
         .btn-upload { background: var(--success); color: white; }
-        .btn-add { background: #007bff; color: white; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h1>Academic Grade Manipulator</h1>
-    
     <div class="controls">
         <input type="file" id="fileInput" accept=".pdf">
         <button class="btn btn-upload" onclick="handleFileUpload()">Upload Transcript PDF</button>
-        <button class="btn btn-add" onclick="addNewManualRow()">+ Add Future Course</button>
+        <button class="btn" onclick="addRow()">+ Add Course/Final</button>
     </div>
 
     <table>
@@ -37,7 +35,7 @@
                 <th>Course ID</th>
                 <th>Course Name</th>
                 <th>Credits</th>
-                <th>Considered Grade</th>
+                <th>Grade/Status</th>
                 <th>Action</th>
             </tr>
         </thead>
@@ -54,64 +52,33 @@
 <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-    let globalHistory = []; 
-
     async function handleFileUpload() {
         const file = document.getElementById('fileInput').files[0];
         if (!file) return;
 
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-        globalHistory = [];
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = ""; 
 
         for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
             const content = await page.getTextContent();
             const text = content.items.map(item => item.str).join(" ");
             
-            // Strictly ignore future semesters [cite: 102, 105]
             if (text.includes("2025-2026")) break;
 
             const pattern = /(\d{6,8})\s+([\u0590-\u05FF\w\s\-\(\)\.,]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption with points|Exemption without points|Not completed|עבר)/g;
             let match;
             while ((match = pattern.exec(text)) !== null) {
-                globalHistory.push({ 
-                    id: match[1], 
-                    name: match[2].trim(), 
-                    credits: parseFloat(match[3]), 
-                    grade: match[4].replace('*', '') 
-                });
+                addRow(match[1], match[2].trim(), match[3], match[4].replace('*', ''));
             }
         }
-        renderTable();
     }
 
-    function renderTable() {
+    function addRow(id = "", name = "", credits = "", grade = "") {
         const tbody = document.getElementById('tableBody');
-        tbody.innerHTML = "";
-        const latestState = {};
-        
-        globalHistory.forEach(entry => {
-            if (!latestState[entry.id]) {
-                latestState[entry.id] = { ...entry, displayGrade: entry.grade };
-            }
-            const isNumeric = !isNaN(parseInt(entry.grade));
-            const isLiteralPass = ["Pass", "עבר", "Exemption with points"].includes(entry.grade);
-            
-            // Considered grade is the last numeric or "Pass" found chronologically [cite: 30, 47]
-            if (isNumeric || isLiteralPass) {
-                latestState[entry.id].displayGrade = entry.grade;
-            }
-        });
-
-        Object.values(latestState).forEach(c => addRowToUI(c.id, c.name, c.credits, c.displayGrade));
-        calculate();
-    }
-
-    function addNewManualRow() { addRowToUI("", "Future Exam", 0, ""); }
-
-    function addRowToUI(id, name, credits, grade) {
-        const row = document.getElementById('tableBody').insertRow();
+        const row = tbody.insertRow();
         row.innerHTML = `
             <td><input type="text" class="cid" value="${id}"></td>
             <td><input type="text" value="${name}"></td>
@@ -127,33 +94,44 @@
         let totalAttemptedCredits = 0;
         let totalPassedCredits = 0;
         
-        // Success Rate must include every single line parsed from history [cite: 16, 47, 74, 87]
-        globalHistory.forEach(h => {
-            totalAttemptedCredits += h.credits;
-            const isPass = (parseInt(h.grade) >= 55) || ["Pass", "עבר", "Exemption with points"].includes(h.grade);
-            if (isPass) totalPassedCredits += h.credits;
-        });
+        // Track unique course IDs for GPA and Earned Credits
+        const uniqueCourses = {};
 
-        let totalPoints = 0, gpaCredits = 0, earnedCredits = 0;
         rows.forEach(row => {
+            const id = row.querySelector('.cid').value.trim();
             const credits = parseFloat(row.querySelector('.creds').value) || 0;
             const grade = row.querySelector('.grd').value.trim();
             const numGrade = parseInt(grade);
 
-            // Earned: Only unique courses that reached a passing state [cite: 13, 14]
-            if (grade === "Exemption with points" || grade === "Pass" || grade === "עבר" || (numGrade >= 55)) {
-                earnedCredits += credits;
+            // 1. DYNAMIC SUCCESS RATE: Every row in the table is an attempt
+            totalAttemptedCredits += credits;
+            const isPass = (numGrade >= 55) || ["Pass", "עבר", "Exemption with points"].includes(grade);
+            if (isPass) totalPassedCredits += credits;
+
+            // 2. GPA & EARNED LOGIC: Track latest numeric/Pass per ID
+            if (!uniqueCourses[id]) {
+                uniqueCourses[id] = { latestNum: null, hasPassed: false, credits: credits };
             }
-            // GPA: Weighted average of the single "Considered" grade per course [cite: 11]
-            if (!isNaN(numGrade)) {
-                totalPoints += (numGrade * credits);
-                gpaCredits += credits;
-            }
+
+            if (isPass) uniqueCourses[id].hasPassed = true;
+            if (!isNaN(numGrade)) uniqueCourses[id].latestNum = numGrade;
+            
+            // Handle English / Exemption
+            if (grade === "Exemption without points") uniqueCourses[id].credits = 0;
         });
 
-        document.getElementById('earnedDisp').innerText = earnedCredits;
-        document.getElementById('gpaDisp').innerText = gpaCredits ? (totalPoints / gpaCredits).toFixed(1) : 0;
-        // Calculation matches 71.5 passed / 119.0 attempted ~ 60% [cite: 11, 28, 45]
+        let weightedSum = 0, gpaCredits = 0, earned = 0;
+        for (let id in uniqueCourses) {
+            const c = uniqueCourses[id];
+            if (c.hasPassed) earned += c.creds || c.credits;
+            if (c.latestNum !== null) {
+                weightedSum += (c.latestNum * (c.creds || c.credits));
+                gpaCredits += (c.creds || c.credits);
+            }
+        }
+
+        document.getElementById('earnedDisp').innerText = earned;
+        document.getElementById('gpaDisp').innerText = gpaCredits ? (weightedSum / gpaCredits).toFixed(1) : 0;
         document.getElementById('succDisp').innerText = totalAttemptedCredits ? Math.round((totalPassedCredits / totalAttemptedCredits) * 100) : 0;
     }
 </script>
