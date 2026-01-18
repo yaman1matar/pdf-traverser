@@ -6,7 +6,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <style>
         :root { --tn-blue: #00529B; --success: #28a745; }
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; background: #f0f2f5; color: #333; }
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f0f2f5; }
         .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
         h1 { color: var(--tn-blue); text-align: center; border-bottom: 2px solid #eee; padding-bottom: 10px; }
         .controls { background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; justify-content: center; }
@@ -69,9 +69,9 @@
             const content = await page.getTextContent();
             const text = content.items.map(item => item.str).join(" ");
             
+            // Strictly ignore future semesters [cite: 102, 105]
             if (text.includes("2025-2026")) break;
 
-            // ENHANCED REGEX: specifically allows dots, parentheses, and special chars in names
             const pattern = /(\d{6,8})\s+([\u0590-\u05FF\w\s\-\(\)\.,]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption with points|Exemption without points|Not completed|עבר)/g;
             let match;
             while ((match = pattern.exec(text)) !== null) {
@@ -97,6 +97,8 @@
             }
             const isNumeric = !isNaN(parseInt(entry.grade));
             const isLiteralPass = ["Pass", "עבר", "Exemption with points"].includes(entry.grade);
+            
+            // Considered grade is the last numeric or "Pass" found chronologically [cite: 30, 47]
             if (isNumeric || isLiteralPass) {
                 latestState[entry.id].displayGrade = entry.grade;
             }
@@ -106,7 +108,7 @@
         calculate();
     }
 
-    function addNewManualRow() { addRowToUI("", "New Course", 0, ""); }
+    function addNewManualRow() { addRowToUI("", "Future Exam", 0, ""); }
 
     function addRowToUI(id, name, credits, grade) {
         const row = document.getElementById('tableBody').insertRow();
@@ -122,12 +124,14 @@
 
     function calculate() {
         const rows = document.querySelectorAll('#tableBody tr');
-        let attemptedCredits = 0, passedCredits = 0;
+        let totalAttemptedCredits = 0;
+        let totalPassedCredits = 0;
         
+        // Success Rate must include every single line parsed from history [cite: 16, 47, 74, 87]
         globalHistory.forEach(h => {
-            attemptedCredits += h.credits;
+            totalAttemptedCredits += h.credits;
             const isPass = (parseInt(h.grade) >= 55) || ["Pass", "עבר", "Exemption with points"].includes(h.grade);
-            if (isPass) passedCredits += h.credits;
+            if (isPass) totalPassedCredits += h.credits;
         });
 
         let totalPoints = 0, gpaCredits = 0, earnedCredits = 0;
@@ -136,9 +140,11 @@
             const grade = row.querySelector('.grd').value.trim();
             const numGrade = parseInt(grade);
 
+            // Earned: Only unique courses that reached a passing state [cite: 13, 14]
             if (grade === "Exemption with points" || grade === "Pass" || grade === "עבר" || (numGrade >= 55)) {
                 earnedCredits += credits;
             }
+            // GPA: Weighted average of the single "Considered" grade per course [cite: 11]
             if (!isNaN(numGrade)) {
                 totalPoints += (numGrade * credits);
                 gpaCredits += credits;
@@ -147,7 +153,8 @@
 
         document.getElementById('earnedDisp').innerText = earnedCredits;
         document.getElementById('gpaDisp').innerText = gpaCredits ? (totalPoints / gpaCredits).toFixed(1) : 0;
-        document.getElementById('succDisp').innerText = attemptedCredits ? Math.round((passedCredits / attemptedCredits) * 100) : 0;
+        // Calculation matches 71.5 passed / 119.0 attempted ~ 60% [cite: 11, 28, 45]
+        document.getElementById('succDisp').innerText = totalAttemptedCredits ? Math.round((totalPassedCredits / totalAttemptedCredits) * 100) : 0;
     }
 </script>
 </body>
