@@ -148,7 +148,7 @@
 
         document.getElementById('earnedDisp').innerText = earned;
         document.getElementById('gpaDisp').innerText = gpaCreds ? (points / gpaCreds).toFixed(1) : 0;
-        document.getElementById('succDisp').innerText = took ? Math.round((passed / took) * 100) : 0;
+        document.getElementById('succDisp').innerText = took ? Math.floor((passed / took) * 100) : 0;
     }
 </script>
 </body>
