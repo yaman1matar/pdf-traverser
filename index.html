@@ -1,99 +1,178 @@
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Technion Grade Manipulator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        :root { --technion-blue: #00529B; --success-green: #28a745; --fail-red: #dc3545; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; background: #f8f9fa; color: #333; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        h1 { color: var(--technion-blue); border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .controls { display: flex; gap: 15px; margin-bottom: 25px; align-items: center; background: #f0f4f8; padding: 15px; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { background: var(--technion-blue); color: white; padding: 12px; position: sticky; top: 0; }
+        td { border: 1px solid #dee2e6; padding: 10px; text-align: center; }
+        input { width: 90%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; text-align: center; }
+        .summary-bar { position: sticky; bottom: 0; background: var(--technion-blue); color: white; padding: 20px; border-radius: 8px; display: flex; justify-content: space-around; margin-top: 30px; font-size: 1.25rem; font-weight: 600; box-shadow: 0 -5px 15px rgba(0,0,0,0.2); }
+        .btn { padding: 10px 20px; cursor: pointer; border-radius: 6px; border: none; font-weight: bold; transition: 0.2s; }
+        .btn-add { background: var(--technion-blue); color: white; }
+        .btn-upload { background: var(--success-green); color: white; }
+        .delete-btn { color: var(--fail-red); cursor: pointer; font-weight: bold; border: none; background: none; }
+    </style>
+</head>
+<body>
 
-async function handleFileUpload() {
-    const file = document.getElementById('fileInput').files[0];
-    if (!file) return alert("Please select a file first");
+<div class="container">
+    <h1>Academic Grade Manipulator</h1>
+    <p>Upload your transcript PDF. Logic: Moed B overrides Moed A. "Pass" affects credits/success but not GPA. "Not completed" = Fail.</p>
 
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-    let fullText = "";
+    <div class="controls">
+        <input type="file" id="fileInput" accept=".pdf" style="width: auto;">
+        <button class="btn btn-upload" onclick="handleFileUpload()">Parse PDF</button>
+        <button class="btn btn-add" onclick="addRow()">+ Add Course Manually</button>
+    </div>
 
-    // The transcript has 8 pages; we traverse them all [cite: 19, 129]
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        fullText += content.items.map(item => item.str).join(" ") + " SEMESTER_BREAK ";
-    }
-    
-    parseTechnionText(fullText);
-}
+    <table>
+        <thead>
+            <tr>
+                <th>Course Name</th>
+                <th>Credits</th>
+                <th>Moed A</th>
+                <th>Moed B</th>
+                <th>Final Grade</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+</div>
 
-function parseTechnionText(text) {
-    // Regex matches: CourseID [cite: 16], Name [cite: 16], Credits [cite: 16], Grade [cite: 16]
-    const pattern = /(\d{7}|\d{6})\s+([\u0590-\u05FF\w\s\-\(\)]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption|Not completed|עבר)/g;
-    
-    // Filter out the current/future semesters (2025-2026) [cite: 103, 106]
-    const pastText = text.split("2025-2026")[0]; 
-    
-    let match;
-    const courseMap = {};
+<div class="summary-bar">
+    <div>Total Credits: <span id="totalCredits">0</span></div>
+    <div>Weighted Average: <span id="average">0</span></div>
+    <div>Success Rate: <span id="successRate">0</span>%</div>
+</div>
 
-    while ((match = pattern.exec(pastText)) !== null) {
-        const [_, id, name, credits, rawGrade] = match;
-        const cleanGrade = rawGrade.replace('*', ''); // Remove the '*' Technion uses for Moed A [cite: 16]
-        
-        if (!courseMap[id]) {
-            courseMap[id] = { name: name.trim(), credits: parseFloat(credits), attempts: [] };
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    async function handleFileUpload() {
+        const file = document.getElementById('fileInput').files[0];
+        if (!file) return;
+
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+        let fullText = "";
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(item => item.str).join(" ") + " ";
         }
-        courseMap[id].attempts.push(cleanGrade);
+        
+        // Step 1: Filter out the current/future semesters based on the ID issue date/year
+        const pastText = fullText.split("2025-2026")[0]; 
+        parseTechnionText(pastText);
     }
 
-    // Process the grouped courses into the UI
-    Object.keys(courseMap).forEach(id => {
-        const course = courseMap[id];
-        // Determine the "Final" grade based on Technion rules
-        let finalGrade = "0";
-        let moedA = course.attempts[0] || "";
-        let moedB = course.attempts[1] || "";
-
-        // Success logic: If any attempt is "Pass" or 55+ [cite: 30, 47]
-        const hasPassed = course.attempts.some(g => g === "Pass" || g === "עבר" || parseInt(g) >= 55);
+    function parseTechnionText(text) {
+        // Updated regex to catch Course IDs, Names, Credits, and Grades (including 'Pass' and 'Not completed')
+        const pattern = /(\d{6,8})\s+([\u0590-\u05FF\w\s\-\(\)]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption|Not completed|עבר)/g;
         
-        if (hasPassed) {
-            finalGrade = course.attempts.find(g => g === "Pass" || g === "עבר" || parseInt(g) >= 55);
-        } else if (course.attempts.includes("Not completed")) {
-            finalGrade = "Failed";
-        } else {
-            finalGrade = moedB || moedA || "0";
-        }
+        let match;
+        const courseMap = {};
 
-        addRow(course.name, course.credits, moedA, moedB, finalGrade);
-    });
-}
-
-function calculate() {
-    let totalWeightedPoints = 0;
-    let creditsForAverage = 0;
-    let totalCreditsEarned = 0;
-    let totalExamAttempts = 0;
-    let passedAttempts = 0;
-
-    document.querySelectorAll('#tableBody tr').forEach(row => {
-        const credits = parseFloat(row.querySelector('.credit-input').value) || 0;
-        const moedA = row.querySelector('.moedA').value;
-        const moedB = row.querySelector('.moedB').value;
-        const final = row.querySelector('.final-cell').innerText;
-
-        // Success Rate Logic:
-        // 1. "Not completed" counts as a fail [cite: 47, 61]
-        // 2. If Moed B exists, it replaces Moed A in the same semester success count
-        if (credits > 0) {
-            totalExamAttempts++; // Count the course instance
+        while ((match = pattern.exec(text)) !== null) {
+            const [_, id, name, credits, rawGrade] = match;
+            const cleanGrade = rawGrade.replace('*', '');
             
-            if (final === "Pass" || final === "עבר" || parseInt(final) >= 55) {
-                passedAttempts++;
-                totalCreditsEarned += credits;
+            // Group by ID to handle multiple attempts in the same or different semesters
+            if (!courseMap[id]) {
+                courseMap[id] = { name: name.trim(), credits: parseFloat(credits), attempts: [] };
             }
-
-            // Average Logic: Ignore "Pass" or non-numeric grades [cite: 30, 61]
-            if (!isNaN(parseInt(final))) {
-                totalWeightedPoints += (parseInt(final) * credits);
-                creditsForAverage += credits;
-            }
+            courseMap[id].attempts.push(cleanGrade);
         }
-    });
 
-    document.getElementById('totalCredits').innerText = totalCreditsEarned;
-    document.getElementById('average').innerText = creditsForAverage ? (totalWeightedPoints / creditsForAverage).toFixed(2) : 0;
-    document.getElementById('successRate').innerText = totalExamAttempts ? ((passedAttempts / totalExamAttempts) * 100).toFixed(1) : 0;
-}
+        document.getElementById('tableBody').innerHTML = ""; // Clear current table
+
+        Object.keys(courseMap).forEach(id => {
+            const course = courseMap[id];
+            // If more than one attempt, we treat attempt 1 as Moed A and attempt 2 as Moed B
+            const m1 = course.attempts[0] || "";
+            const m2 = course.attempts[1] || "";
+            
+            // Determine final grade for display
+            let final = m2 || m1;
+            if (m1 === "Not completed" && !m2) final = "Fail";
+            
+            addRow(course.name, course.credits, m1, m2, final);
+        });
+    }
+
+    function addRow(name = "", credits = "", m1 = "", m2 = "", final = "") {
+        const tbody = document.getElementById('tableBody');
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><input type="text" value="${name}"></td>
+            <td><input type="number" class="credit-input" step="0.5" value="${credits}" oninput="calculate()"></td>
+            <td><input type="text" class="moedA" value="${m1}" oninput="updateFinal(this)"></td>
+            <td><input type="text" class="moedB" value="${m2}" oninput="updateFinal(this)"></td>
+            <td class="final-cell">${final}</td>
+            <td><button class="delete-btn" onclick="this.parentElement.parentElement.remove(); calculate()">✕</button></td>
+        `;
+        tbody.appendChild(row);
+        calculate();
+    }
+
+    function updateFinal(input) {
+        const row = input.parentElement.parentElement;
+        const a = row.querySelector('.moedA').value;
+        const b = row.querySelector('.moedB').value;
+        
+        let res = b || a || "0";
+        if (a === "Not completed" && !b) res = "Fail";
+        
+        row.querySelector('.final-cell').innerText = res;
+        calculate();
+    }
+
+    function calculate() {
+        let totalWeightedPoints = 0;
+        let creditsForAverage = 0;
+        let totalCreditsEarned = 0;
+        let totalExamInstances = 0;
+        let passedInstances = 0;
+
+        document.querySelectorAll('#tableBody tr').forEach(row => {
+            const credits = parseFloat(row.querySelector('.credit-input').value) || 0;
+            const final = row.querySelector('.final-cell').innerText.trim();
+
+            if (credits > 0 || final === "Exemption") {
+                totalExamInstances++;
+
+                // Success Logic
+                const isNumericPass = !isNaN(parseInt(final)) && parseInt(final) >= 55;
+                const isLiteralPass = (final === "Pass" || final === "עבר" || final.includes("Exemption"));
+                
+                if (isNumericPass || isLiteralPass) {
+                    passedInstances++;
+                    totalCreditsEarned += credits;
+                }
+
+                // Average Logic (Ignore non-numeric grades like Pass/Exemption)
+                if (!isNaN(parseInt(final))) {
+                    totalWeightedPoints += (parseInt(final) * credits);
+                    creditsForAverage += credits;
+                }
+            }
+        });
+
+        document.getElementById('totalCredits').innerText = totalCreditsEarned;
+        document.getElementById('average').innerText = creditsForAverage ? (totalWeightedPoints / creditsForAverage).toFixed(2) : 0;
+        document.getElementById('successRate').innerText = totalExamInstances ? ((passedInstances / totalExamInstances) * 100).toFixed(1) : 0;
+    }
+</script>
+</body>
+</html>
