@@ -25,7 +25,7 @@
     <div class="controls">
         <input type="file" id="fileInput" accept=".pdf">
         <button class="btn btn-upload" onclick="handleFileUpload()">Upload & Parse</button>
-        <button class="btn" onclick="addRow()">+ Add Course Manually</button>
+        <button class="btn" onclick="addNewManualRow()">+ Add Future Course</button>
     </div>
 
     <table>
@@ -34,7 +34,7 @@
                 <th>ID</th>
                 <th>Course Name</th>
                 <th>Credits</th>
-                <th>Grade</th>
+                <th>Considered Grade</th>
                 <th>Action</th>
             </tr>
         </thead>
@@ -51,36 +51,65 @@
 <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
+    let globalHistory = []; // To store every single exam entry for success rate logic
+
     async function handleFileUpload() {
         const file = document.getElementById('fileInput').files[0];
         if (!file) return;
 
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-        let allEntries = [];
+        globalHistory = [];
 
-        // Traverse page by page, line by line
         for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
             const content = await page.getTextContent();
             const text = content.items.map(item => item.str).join(" ");
             
-            // Stop parsing if we hit the current active semester
+            // 1. Ignore the last 2 semesters (2025-2026)
             if (text.includes("2025-2026")) break;
 
             const pattern = /(\d{6,8})\s+([\u0590-\u05FF\w\s\-\(\)]+?)\s+(\d\.?\d?)\s+(\d{2,3}|\*?\d{2,3}|Pass|Exemption with points|Exemption without points|Not completed|עבר)/g;
             let match;
             while ((match = pattern.exec(text)) !== null) {
-                allEntries.push({ id: match[1], name: match[2].trim(), credits: parseFloat(match[3]), grade: match[4].replace('*', '') });
+                globalHistory.push({ 
+                    id: match[1], 
+                    name: match[2].trim(), 
+                    credits: parseFloat(match[3]), 
+                    grade: match[4].replace('*', '') 
+                });
             }
         }
-        
-        const tbody = document.getElementById('tableBody');
-        tbody.innerHTML = "";
-        allEntries.forEach(e => addRow(e.id, e.name, e.credits, e.grade));
+        renderTable();
     }
 
-    function addRow(id="", name="", credits="", grade="") {
+    function renderTable() {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = "";
+        
+        const latestState = {};
+        globalHistory.forEach(entry => {
+            if (!latestState[entry.id]) {
+                latestState[entry.id] = { ...entry, displayGrade: entry.grade };
+            }
+            // Logic: Update grade if numeric. If "Not completed", don't overwrite previous numeric.
+            const isNumeric = !isNaN(parseInt(entry.grade));
+            if (isNumeric) {
+                latestState[entry.id].displayGrade = entry.grade;
+            } else if (entry.grade === "Pass" || entry.grade === "עבר") {
+                latestState[entry.id].displayGrade = entry.grade;
+            }
+        });
+
+        Object.values(latestState).forEach(c => addRowToUI(c.id, c.name, c.credits, c.displayGrade));
+        calculate();
+    }
+
+    function addNewManualRow() {
+        addRowToUI("", "Future Course", 0, "");
+    }
+
+    function addRowToUI(id, name, credits, grade) {
         const row = document.getElementById('tableBody').insertRow();
         row.innerHTML = `
             <td><input type="text" class="cid" value="${id}"></td>
@@ -97,42 +126,30 @@
         let attemptedCredits = 0;
         let passedCredits = 0;
         
-        let courseStats = {}; // To track the "Last Known State" of each course
+        // Success Rate: Must use ALL historical attempts
+        globalHistory.forEach(h => {
+            attemptedCredits += h.credits;
+            const isPass = (parseInt(h.grade) >= 55) || ["Pass", "עבר", "Exemption with points"].includes(h.grade);
+            if (isPass) passedCredits += h.credits;
+        });
 
+        // GPA and Earned: Use only the rows currently visible (Considered Grades)
+        let totalPoints = 0, gpaCreds = 0, earned = 0;
+        
         rows.forEach(row => {
-            const id = row.querySelector('.cid').value.trim();
             const credits = parseFloat(row.querySelector('.creds').value) || 0;
             const grade = row.querySelector('.grd').value.trim();
             const numGrade = parseInt(grade);
 
-            // 1. Line-by-Line Success Logic
-            attemptedCredits += credits;
-            const isPass = (numGrade >= 55) || ["Pass", "עבר", "Exemption with points"].includes(grade);
-            if (isPass) passedCredits += credits;
-
-            // 2. State Management for GPA/Earned
-            if (!courseStats[id]) courseStats[id] = { lastNum: null, hasPassed: false, creds: credits };
+            if (grade === "Exemption with points" || grade === "Pass" || grade === "עבר" || (numGrade >= 55)) {
+                earned += credits;
+            }
             
-            if (isPass) courseStats[id].hasPassed = true;
-            if (!isNaN(numGrade)) courseStats[id].lastNum = numGrade;
-            
-            // English / Exemption logic
-            if (grade === "Exemption without points") courseStats[id].creds = 0;
-            if (grade === "Exemption with points") {
-                courseStats[id].creds = credits;
-                courseStats[id].hasPassed = true;
+            if (!isNaN(numGrade)) {
+                totalPoints += (numGrade * credits);
+                gpaCreds += credits;
             }
         });
-
-        let totalPoints = 0, gpaCreds = 0, earned = 0;
-        for (let id in courseStats) {
-            const c = courseStats[id];
-            if (c.hasPassed) earned += c.creds;
-            if (c.lastNum !== null) {
-                totalPoints += (c.lastNum * c.creds);
-                gpaCreds += c.creds;
-            }
-        }
 
         document.getElementById('earnedDisp').innerText = earned;
         document.getElementById('gpaDisp').innerText = gpaCreds ? (totalPoints / gpaCreds).toFixed(1) : 0;
